@@ -2,6 +2,15 @@ name: Build and Release
 
 on:
   workflow_call:
+    secrets:
+      KEYSTORE_FILE:
+        required: true
+      KEYSTORE_PASSWORD:
+        required: true
+      KEY_PASSWORD:
+        required: true
+      KEY_ALIAS:
+        required: true
 
 jobs:
   build:
