@@ -58,7 +58,7 @@ jobs:
         path: app/build/outputs/apk/release/*.apk
         if-no-files-found: error
         overwrite: true
-        retention-days: 1
+        retention-days: 15
 
   release:
     runs-on: ubuntu-latest
