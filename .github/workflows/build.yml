@@ -1,85 +1,119 @@
 name: Build and Release
 
+# Reusable workflow. Call it from a project repository:
+#
+#   jobs:
+#     build:
+#       uses: FuckAPK/workflows/.github/workflows/build.yml@v1
+#       permissions:
+#         contents: write
+#       secrets: inherit
+#
+# It always verifies the code by assembling the debug variant, and additionally builds,
+# signs and publishes the release APK for pushes to a branch and for manual runs.
+# Tag pushes are attached to a GitHub release.
+
 on:
   workflow_call:
     secrets:
+      # Only needed for the `package` job. They are intentionally *not* required so that
+      # pull requests - which never receive secrets, Dependabot pull requests in
+      # particular - can still be verified.
       KEYSTORE_FILE:
-        required: true
+        required: false
       KEYSTORE_PASSWORD:
-        required: true
+        required: false
       KEY_PASSWORD:
-        required: true
+        required: false
       KEY_ALIAS:
-        required: true
+        required: false
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  verify:
+    name: Verify
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        submodules: true
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # `versionCode` is derived from the git history.
+          fetch-depth: 0
+          submodules: true
 
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '21'
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
-    - name: Cache Gradle packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.gradle/caches
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+      # Deliberately unsigned and secret-free: this is the job that gates pull requests.
+      - name: Assemble debug
+        run: ./gradlew assembleDebug --stacktrace
 
-    - name: Set up environment
-      run: |
-        echo "storeFilePath=$(pwd)/keystore.jks" > signing.properties
-        echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> signing.properties
-        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> signing.properties
-        echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> signing.properties
-        echo -n "${{ secrets.KEYSTORE_FILE }}" | base64 --decode --ignore-garbage > keystore.jks
-
-    - name: Build
-      run: |
-        ./gradlew clean
-        ./gradlew assembleRelease --no-daemon
-
-    - name: upload
-      if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.run_id }}
-        path: app/build/outputs/apk/release/*.apk
-        if-no-files-found: error
-        overwrite: true
-        retention-days: 15
-
-  release:
+  package:
+    name: Release APK
+    needs: verify
+    # Pull requests stop after `verify`: they must not need signing secrets.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
-    - name: download
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ github.run_id }}
-        path: artifacts/
-    - run: ls -R artifacts
-    - name: Upload APKs to release
-      uses: softprops/action-gh-release@v2
-      with:
-        generate_release_notes: true
-        token: ${{ secrets.GITHUB_TOKEN }}
-        files: |
-          artifacts/*.apk
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure release signing
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_FILE" ]; then
+            echo "::error::KEYSTORE_FILE is empty - configure the release secrets for this repository"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_FILE" | base64 --decode --ignore-garbage > keystore.jks
+          {
+            echo "storeFilePath=$PWD/keystore.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+          } > signing.properties
+
+      - name: Assemble release
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.run_id }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 15
+
+      - name: Attach APK to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: app/build/outputs/apk/release/*.apk
