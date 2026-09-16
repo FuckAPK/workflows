@@ -9,16 +9,20 @@ name: Build and Release
 #         contents: write
 #       secrets: inherit
 #
-# It always verifies the code by assembling the debug variant, and additionally builds,
-# signs and publishes the release APK for pushes to a branch and for manual runs.
-# Tag pushes are attached to a GitHub release.
+# Two mutually exclusive jobs:
+#
+#   pull request / branch push -> `verify`  : assembleDebug, no secrets at all
+#   tag push                   -> `package` : signed release APK + GitHub release
+#
+# Reference this repository as `@v1`. The tag is the floating major version: move it when a
+# change here should reach the projects, so that none of them has to be edited.
 
 on:
   workflow_call:
     secrets:
-      # Only needed for the `package` job. They are intentionally *not* required so that
-      # pull requests - which never receive secrets, Dependabot pull requests in
-      # particular - can still be verified.
+      # Only the `package` job uses them, and that job only runs for tags. They are declared
+      # `required: false` so the secret-free `verify` job can run for pull requests -
+      # Dependabot pull requests never receive repository secrets.
       KEYSTORE_FILE:
         required: false
       KEYSTORE_PASSWORD:
@@ -34,6 +38,8 @@ permissions:
 jobs:
   verify:
     name: Verify
+    # Everything except tags. This is the job that gates pull requests.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -52,15 +58,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Deliberately unsigned and secret-free: this is the job that gates pull requests.
+      # Deliberately unsigned and secret-free.
       - name: Assemble debug
         run: ./gradlew assembleDebug --stacktrace
 
   package:
     name: Release APK
-    needs: verify
-    # Pull requests stop after `verify`: they must not need signing secrets.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Tags only. No `needs: verify` on purpose: the debug build is redundant here, and a
+    # skipped dependency would skip this job as well.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -112,7 +118,6 @@ jobs:
           retention-days: 15
 
       - name: Attach APK to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true

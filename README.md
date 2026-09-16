@@ -30,10 +30,17 @@ jobs:
 
 ### Jobs
 
-| job | when | needs secrets | what it does |
+| job | runs on | needs secrets | what it does |
 |---|---|---|---|
-| `verify` | always | no | `./gradlew assembleDebug` - this is what gates pull requests |
-| `package` | `push` / `workflow_dispatch` | yes | signs and assembles the release APK, uploads it as an artifact, and attaches it to a GitHub release on tag pushes |
+| `verify` | pull request, branch push, manual run on a branch | no | `./gradlew assembleDebug` - this is what gates pull requests |
+| `package` | **tag push only** (or a manual run against a tag) | yes | signs and assembles the release APK, uploads it as an artifact, and attaches it to the GitHub release |
+
+The two jobs are mutually exclusive: a tag push never builds the debug variant, and a branch
+push or pull request never touches the signing secrets. `package` deliberately has no
+`needs: verify`, because a job that depends on a skipped job is skipped as well.
+
+A normal release flow is therefore: merge to `main` → `verify` turns green → push a tag →
+`package` signs the APK and publishes the GitHub release.
 
 ### Why it is split this way
 
@@ -45,11 +52,11 @@ jobs:
 * The caller must use `pull_request`, not `pull_request_target`. With
   `pull_request_target`, `actions/checkout` checks out the base branch, so the build
   validates `main` and the green check says nothing about the pull request.
-* The signing secrets are declared `required: false` so that the `verify` job can run
-  without them.
+* The signing secrets are declared `required: false` so the `verify` job can run without
+  them.
 
 ### Versioning of this repository
 
-Project repositories reference `@v1`. Bump the tag when a change to these workflows should
-reach the projects; a floating `@main` reference would silently change ten repositories at
-once.
+Project repositories reference `@v1`, which is a floating major tag: move it when a change to
+these workflows should reach the projects. A floating `@main` reference would silently change
+ten repositories at once; a `@v1` tag makes that an explicit decision.
